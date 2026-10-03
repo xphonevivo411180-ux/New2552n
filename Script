@@ -1,0 +1,469 @@
+-- ==========================================
+-- 📌 1. บริการและตัวแปรพื้นฐาน (ประกาศครั้งเดียว)
+-- ==========================================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Cam = workspace.CurrentCamera
+
+-- ==========================================
+-- ⚙️ 2. ตั้งค่าระบบเปิด/ปิด (SETTINGS)
+-- ==========================================
+local Settings = {
+    AimEnabled = false,
+    AimPart = "Head",
+    FOVRadius = 300,
+    
+    EspEnabled = true,
+    ItemEspEnabled = true,
+    
+    ShootRange = 3000,
+    MultipleShot = 1,
+    MagicBullet = false
+}
+
+-- ==========================================
+-- 🎯 3. วงกลม FOV GUI
+-- ==========================================
+local FOVGui = Instance.new("ScreenGui")
+FOVGui.Name = "FOVGui"
+FOVGui.ResetOnSpawn = false
+FOVGui.Parent = PlayerGui
+
+local Circle = Instance.new("Frame")
+Circle.Size = UDim2.new(0, Settings.FOVRadius * 2, 0, Settings.FOVRadius * 2)
+Circle.Position = UDim2.new(0.5, -Settings.FOVRadius, 0.5, -Settings.FOVRadius)
+Circle.BackgroundTransparency = 1
+Circle.Visible = Settings.AimEnabled
+Circle.Parent = FOVGui
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(1, 0)
+Corner.Parent = Circle
+
+local Stroke = Instance.new("UIStroke")
+Stroke.Color = Color3.fromRGB(255, 255, 255)
+Stroke.Thickness = 1.5
+Stroke.Transparency = 0.3
+Stroke.Parent = Circle
+
+local function UpdateFOVSize(newRadius)
+    Settings.FOVRadius = newRadius
+    Circle.Size = UDim2.new(0, newRadius * 2, 0, newRadius * 2)
+    Circle.Position = UDim2.new(0.5, -newRadius, 0.5, -newRadius)
+end
+
+-- ==========================================
+-- 🔍 4. ฟังก์ชันหาเป้าหมาย (Get Target)
+-- ==========================================
+local function GetTarget()
+    Cam = workspace.CurrentCamera
+    if not Cam or not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then 
+        return nil 
+    end
+    
+    local Center = Vector2.new(Cam.ViewportSize.X / 2, Cam.ViewportSize.Y / 2)
+    local MyPos = LocalPlayer.Character.HumanoidRootPart.Position
+    local BestTarget, BestDist = nil, Settings.FOVRadius
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    for _, Plr in pairs(Players:GetPlayers()) do
+        if Plr ~= LocalPlayer and Plr.Character 
+        and Plr.Character:FindFirstChild(Settings.AimPart)
+        and Plr.Character:FindFirstChild("Humanoid")
+        and Plr.Character.Humanoid.Health > 0 then
+            
+            local TargetPart = Plr.Character[Settings.AimPart]
+            local Pos, Visible = Cam:WorldToViewportPoint(TargetPart.Position)
+            
+            if Visible then
+                local Dist = (Vector2.new(Pos.X, Pos.Y) - Center).Magnitude
+                if Dist < BestDist then
+                    local Dir = (TargetPart.Position - MyPos).Unit
+                    local Dis = (TargetPart.Position - MyPos).Magnitude
+                    
+                    if Dis <= Settings.ShootRange then
+                        local Ray = workspace:Raycast(MyPos, Dir * Dis, rayParams)
+                        if not Ray or Ray.Instance:IsDescendantOf(Plr.Character) then
+                            BestDist = Dist
+                            BestTarget = TargetPart
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return BestTarget
+end
+
+-- ==========================================
+-- 👁️ 5. ระบบ ESP (BillboardGui & Drawing API)
+-- ==========================================
+local ESP_Objects = {}
+local TextLabels = {}
+
+local function RemoveESP(Player)
+    if ESP_Objects[Player] and ESP_Objects[Player].Gui then
+        ESP_Objects[Player].Gui:Destroy()
+        ESP_Objects[Player] = nil
+    end
+    if TextLabels[Player.UserId] then
+        TextLabels[Player.UserId]:Remove()
+        TextLabels[Player.UserId] = nil
+    end
+end
+
+local function CreateESP(Player)
+    if Player == LocalPlayer then return end
+
+    local function SetupCharacter(char)
+        local head = char:WaitForChild("Head", 5)
+        if not head then return end
+
+        RemoveESP(Player)
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "ESP_Name"
+        billboard.Adornee = head
+        billboard.Size = UDim2.new(0, 200, 0, 50)
+        billboard.StudsOffset = Vector3.new(0, 2, 0)
+        billboard.AlwaysOnTop = true
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.TextStrokeTransparency = 0
+        label.TextSize = 14
+        label.Font = Enum.Font.SourceSansBold
+        label.Parent = billboard
+
+        billboard.Parent = head
+        ESP_Objects[Player] = { Gui = billboard, Label = label }
+    end
+
+    if Player.Character then SetupCharacter(Player.Character) end
+    Player.CharacterAdded:Connect(SetupCharacter)
+
+    if Drawing then
+        local Draw = Drawing.new("Text")
+        Draw.Center = true
+        Draw.Outline = true
+        Draw.Font = 2
+        Draw.Size = 13
+        Draw.Color = Color3.fromRGB(255, 220, 80)
+        Draw.Visible = false
+        TextLabels[Player.UserId] = Draw
+    end
+end
+
+for _, P in pairs(Players:GetPlayers()) do CreateESP(P) end
+Players.PlayerAdded:Connect(CreateESP)
+Players.PlayerRemoving:Connect(RemoveESP)
+
+local function GetHeldItem(Character)
+    if not Character then return nil end
+    local Tool = Character:FindFirstChildOfClass("Tool")
+    return Tool and ("🎒 " .. Tool.Name) or nil
+end
+
+-- ==========================================
+-- 🎛️ 6. ระบบ UI Controller
+-- ==========================================
+local function CreateSlider(parent, label, min, max, default, callback)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(1, 0, 0, 45)
+    container.BackgroundTransparency = 1
+    container.Parent = parent
+    
+    local name = Instance.new("TextLabel")
+    name.Size = UDim2.new(0.6, 0, 0, 20)
+    name.BackgroundTransparency = 1
+    name.Text = label
+    name.TextXAlignment = Enum.TextXAlignment.Left
+    name.TextColor3 = Color3.fromRGB(200, 200, 200)
+    name.Font = Enum.Font.Gotham
+    name.TextSize = 12
+    name.Parent = container
+    
+    local valueLabel = Instance.new("TextLabel")
+    valueLabel.Size = UDim2.new(0.3, 0, 0, 20)
+    valueLabel.Position = UDim2.new(0.7, 0, 0, 0)
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.Text = tostring(default)
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+    valueLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+    valueLabel.Font = Enum.Font.Gotham
+    valueLabel.TextSize = 11
+    valueLabel.Parent = container
+    
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(1, 0, 0, 6)
+    track.Position = UDim2.new(0, 0, 0, 25)
+    track.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    track.BorderSizePixel = 0
+    track.Parent = container
+    
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(80, 140, 255)
+    fill.BorderSizePixel = 0
+    fill.Parent = track
+    
+    local knob = Instance.new("TextButton")
+    knob.Size = UDim2.new(0, 14, 0, 14)
+    knob.Position = UDim2.new((default - min) / (max - min), -7, 0.5, -7)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    knob.Text = ""
+    knob.Parent = track
+    
+    local dragging = false
+    knob.MouseButton1Down:Connect(function() dragging = true end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local absPos = track.AbsolutePosition
+            local absSize = track.AbsoluteSize
+            if absSize.X > 0 then
+                local percent = math.clamp((input.Position.X - absPos.X) / absSize.X, 0, 1)
+                local val = math.floor(min + (max - min) * percent)
+                fill.Size = UDim2.new(percent, 0, 1, 0)
+                knob.Position = UDim2.new(percent, -7, 0.5, -7)
+                valueLabel.Text = tostring(val)
+                callback(val)
+            end
+        end
+    end)
+    return container
+end
+
+local function CreateToggle(parent, label, default, callback)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(1, 0, 0, 36)
+    container.BackgroundTransparency = 1
+    container.Parent = parent
+    
+    local name = Instance.new("TextLabel")
+    name.Size = UDim2.new(0.75, 0, 1, 0)
+    name.BackgroundTransparency = 1
+    name.Text = label
+    name.TextXAlignment = Enum.TextXAlignment.Left
+    name.TextColor3 = Color3.fromRGB(200, 200, 200)
+    name.Font = Enum.Font.Gotham
+    name.TextSize = 12
+    name.Parent = container
+    
+    local box = Instance.new("TextButton")
+    box.Size = UDim2.new(0, 18, 0, 18)
+    box.Position = UDim2.new(1, -18, 0.5, -9)
+    box.BackgroundColor3 = default and Color3.fromRGB(80, 140, 255) or Color3.fromRGB(50, 50, 60)
+    box.BorderSizePixel = 0
+    box.Text = ""
+    box.Parent = container
+    
+    local state = default
+    box.MouseButton1Click:Connect(function()
+        state = not state
+        box.BackgroundColor3 = state and Color3.fromRGB(80, 140, 255) or Color3.fromRGB(50, 50, 60)
+        callback(state)
+    end)
+    return container
+end
+
+local function CreateDropdown(parent, label, options, defaultIndex, callback)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(1, 0, 0, 36)
+    container.BackgroundTransparency = 1
+    container.Parent = parent
+    
+    local name = Instance.new("TextLabel")
+    name.Size = UDim2.new(0.4, 0, 1, 0)
+    name.BackgroundTransparency = 1
+    name.Text = label
+    name.TextXAlignment = Enum.TextXAlignment.Left
+    name.TextColor3 = Color3.fromRGB(200, 200, 200)
+    name.Font = Enum.Font.Gotham
+    name.TextSize = 12
+    name.Parent = container
+    
+    local selectedIndex = defaultIndex
+    local display = Instance.new("TextButton")
+    display.Size = UDim2.new(0.55, 0, 0, 26)
+    display.Position = UDim2.new(0.45, 0, 0.5, -13)
+    display.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    display.BorderSizePixel = 0
+    display.Text = "  " .. options[selectedIndex] .. "  ▼"
+    display.TextXAlignment = Enum.TextXAlignment.Left
+    display.TextColor3 = Color3.fromRGB(180, 180, 180)
+    display.Font = Enum.Font.Gotham
+    display.TextSize = 11
+    display.Parent = container
+    
+    display.MouseButton1Click:Connect(function()
+        selectedIndex = selectedIndex + 1
+        if selectedIndex > #options then selectedIndex = 1 end
+        display.Text = "  " .. options[selectedIndex] .. "  ▼"
+        callback(options[selectedIndex])
+    end)
+    return container
+end
+
+-- ==========================================
+-- 🖥️ 7. สร้าง ScreenGui และ Window
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CombatMenuGUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = PlayerGui
+
+-- 🔘 ปุ่ม Toggle เปิด/ปิด เมนูที่ซ้ายบน
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Name = "TopLeftToggleBtn"
+ToggleBtn.Size = UDim2.new(0, 60, 0, 25)
+ToggleBtn.Position = UDim2.new(0, 45, 0, 55) -- ตำแหน่งมุมซ้ายบน ใต้ปุ่มเมนู Roblox[span_1](start_span)[span_1](end_span)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.Text = "Toggle"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.TextSize = 12
+ToggleBtn.Parent = ScreenGui
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(0, 4)
+ToggleCorner.Parent = ToggleBtn
+
+local ToggleStroke = Instance.new("UIStroke")
+ToggleStroke.Color = Color3.fromRGB(60, 60, 70)
+ToggleStroke.Thickness = 1
+ToggleStroke.Parent = ToggleBtn
+
+-- 📦 กรอบเมนูหลัก
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 320, 0, 420)
+MainFrame.Position = UDim2.new(0.5, -160, 0.5, -210)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Parent = ScreenGui
+
+-- สลับการซ่อน/แสดงเมนูเมื่อกดปุ่ม Toggle
+ToggleBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = not MainFrame.Visible
+end)
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -20, 0, 30)
+Title.Position = UDim2.new(0, 10, 0, 5)
+Title.BackgroundTransparency = 1
+Title.Text = "⚔️ COMBAT MENU"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = MainFrame
+
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Size = UDim2.new(1, -20, 1, -45)
+ContentFrame.Position = UDim2.new(0, 10, 0, 40)
+ContentFrame.BackgroundTransparency = 1
+ContentFrame.Parent = MainFrame
+
+local Layout = Instance.new("UIListLayout")
+Layout.SortOrder = Enum.SortOrder.LayoutOrder
+Layout.Padding = UDim.new(0, 5)
+Layout.Parent = ContentFrame
+
+-- สร้างคอนโทรลต่างๆ ในเมนู
+CreateToggle(ContentFrame, "เปิดใช้งาน Aimbot", Settings.AimEnabled, function(state)
+    Settings.AimEnabled = state
+    Circle.Visible = state
+end)
+
+CreateToggle(ContentFrame, "เปิดใช้งาน ESP ชื่อ", Settings.EspEnabled, function(state)
+    Settings.EspEnabled = state
+end)
+
+CreateToggle(ContentFrame, "เปิดใช้งาน ESP ของในมือ", Settings.ItemEspEnabled, function(state)
+    Settings.ItemEspEnabled = state
+end)
+
+CreateSlider(ContentFrame, "ขนาด FOV", 50, 800, Settings.FOVRadius, function(val)
+    UpdateFOVSize(val)
+end)
+
+CreateSlider(ContentFrame, "ระยะยิง (Shoot Range)", 100, 5000, Settings.ShootRange, function(val)
+    Settings.ShootRange = val
+end)
+
+CreateDropdown(ContentFrame, "ตำแหน่งล็อกเป้า (Aim Part)", {"Head", "HumanoidRootPart", "Torso"}, 1, function(choice)
+    Settings.AimPart = choice
+end)
+
+-- ==========================================
+-- 🔄 8. Main Loop (RenderStepped)
+-- ==========================================
+RunService.RenderStepped:Connect(function()
+    Cam = workspace.CurrentCamera
+    local myChar = LocalPlayer.Character
+    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+    if Settings.AimEnabled then
+        local Target = GetTarget()
+        if Target and Cam then
+            Cam.CFrame = CFrame.new(Cam.CFrame.Position, Target.Position)
+        end
+    end
+
+    for player, esp in pairs(ESP_Objects) do
+        local char = player.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        local head = char and char:FindFirstChild("Head")
+
+        if Settings.EspEnabled and myHRP and char and head and hum and hum.Health > 0 then
+            local dist = math.floor((myHRP.Position - head.Position).Magnitude)
+            esp.Label.Text = player.Name .. " [" .. dist .. "m]"
+            esp.Gui.Enabled = true
+        else
+            if esp.Gui then esp.Gui.Enabled = false end
+        end
+    end
+
+    if Drawing then
+        for _, Plr in pairs(Players:GetPlayers()) do
+            if Plr ~= LocalPlayer then
+                local Draw = TextLabels[Plr.UserId]
+                if Draw then
+                    local char = Plr.Character
+                    local head = char and char:FindFirstChild("Head")
+                    local hum = char and char:FindFirstChild("Humanoid")
+
+                    if Settings.ItemEspEnabled and head and hum and hum.Health > 0 and Cam then
+                        local Pos, Visible = Cam:WorldToViewportPoint(head.Position + Vector3.new(0, 1.5, 0))
+                        local Item = GetHeldItem(char)
+
+                        if Visible and Item then
+                            Draw.Visible = true
+                            Draw.Position = Vector2.new(Pos.X, Pos.Y)
+                            Draw.Text = Item
+                        else
+                            Draw.Visible = false
+                        end
+                    else
+                        Draw.Visible = false
+                    end
+                end
+            end
+        end
+    end
+end)
+
+print("✅ เพิ่มปุ่ม Toggle มุมซ้ายบนเรียบร้อยแล้ว!")
